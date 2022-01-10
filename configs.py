@@ -3,42 +3,39 @@ def cartpole_masked_config():
         "env": "CartPoleMasked",
         "gamma": 0.99,
         "lamda": 0.95,
-        "updates": 100,
+        "updates": 200,
         "epochs": 4,
         "n_workers": 16,
         "worker_steps": 256,
         "n_mini_batch": 4,
         "value_loss_coefficient": 0.2,
         "hidden_layer_size": 128,
-        "recurrence": 
-            {
+        "recurrence": {
             "sequence_length": 8,
             "hidden_state_size": 64,
             "layer_type": "lstm",
-            "reset_hidden_state": True
-            },
-        "learning_rate_schedule":
-            {
+            "reset_hidden_state": True,
+        },
+        "learning_rate_schedule": {
             "initial": 3.0e-4,
             "final": 3.0e-6,
             "power": 1.0,
-            "max_decay_steps": 100
-            },
-        "beta_schedule":
-            {
+            "max_decay_steps": 100,
+        },
+        "beta_schedule": {
             "initial": 0.001,
             "final": 0.0001,
             "power": 1.0,
-            "max_decay_steps": 100
-            },
-        "clip_range_schedule":
-            {
+            "max_decay_steps": 100,
+        },
+        "clip_range_schedule": {
             "initial": 0.2,
             "final": 0.2,
             "power": 1.0,
-            "max_decay_steps": 1000
-            }
+            "max_decay_steps": 1000,
+        },
     }
+
 
 def minigrid_config():
     return {
@@ -52,35 +49,32 @@ def minigrid_config():
         "n_mini_batch": 8,
         "value_loss_coefficient": 0.25,
         "hidden_layer_size": 512,
-        "recurrence": 
-            {
+        "recurrence": {
             "sequence_length": 8,
             "hidden_state_size": 256,
             "layer_type": "lstm",
-            "reset_hidden_state": False
-            },
-        "learning_rate_schedule":
-            {
+            "reset_hidden_state": False,
+        },
+        "learning_rate_schedule": {
             "initial": 2.0e-4,
             "final": 2.0e-4,
             "power": 1.0,
-            "max_decay_steps": 300
-            },
-        "beta_schedule":
-            {
+            "max_decay_steps": 300,
+        },
+        "beta_schedule": {
             "initial": 0.001,
             "final": 0.001,
             "power": 1.0,
-            "max_decay_steps": 300
-            },
-        "clip_range_schedule":
-            {
+            "max_decay_steps": 300,
+        },
+        "clip_range_schedule": {
             "initial": 0.2,
             "final": 0.2,
             "power": 1.0,
-            "max_decay_steps": 300
-            }
+            "max_decay_steps": 300,
+        },
     }
+
 
 def poc_memory_env_config():
     return {
@@ -94,32 +88,28 @@ def poc_memory_env_config():
         "n_mini_batch": 8,
         "value_loss_coefficient": 0.1,
         "hidden_layer_size": 64,
-        "recurrence": 
-            {
+        "recurrence": {
             "sequence_length": 8,
             "hidden_state_size": 32,
             "layer_type": "gru",
-            "reset_hidden_state": True
-            },
-        "learning_rate_schedule":
-            {
+            "reset_hidden_state": True,
+        },
+        "learning_rate_schedule": {
             "initial": 3.0e-4,
             "final": 3.0e-4,
             "power": 1.0,
-            "max_decay_steps": 30
-            },
-        "beta_schedule":
-            {
+            "max_decay_steps": 30,
+        },
+        "beta_schedule": {
             "initial": 0.001,
             "final": 0.0001,
             "power": 1.0,
-            "max_decay_steps": 30
-            },
-        "clip_range_schedule":
-            {
+            "max_decay_steps": 30,
+        },
+        "clip_range_schedule": {
             "initial": 0.2,
             "final": 0.2,
             "power": 1.0,
-            "max_decay_steps": 30
-            }
+            "max_decay_steps": 30,
+        },
     }

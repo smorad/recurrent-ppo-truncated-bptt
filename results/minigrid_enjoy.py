@@ -11,6 +11,7 @@ from model import ActorCriticModel
 from utils import create_env
 import imageio
 
+
 def main():
     # Command line arguments via docopt
     _USAGE = """
@@ -38,7 +39,7 @@ def main():
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
-    
+
     # Run and render episode
     done = False
     episode_rewards = []
@@ -56,20 +57,23 @@ def main():
         # Render environment
         images.append(env.render())
         # Forward model
-        policy, value, recurrent_cell = model(np.expand_dims(obs, 0), recurrent_cell, device, 1)
+        policy, value, recurrent_cell = model(
+            np.expand_dims(obs, 0), recurrent_cell, device, 1
+        )
         # Sample action
         action = policy.sample().cpu().numpy()
         # Step environemnt
         obs, reward, done, info = env.step(int(action))
         episode_rewards.append(reward)
-    
+
     images.append(env.render())
     print("Episode length: " + str(info["length"]))
     print("Episode reward: " + str(info["reward"]))
-    
-    imageio.mimsave('results/minigrid_gif/MiniGrid.gif', images, fps=1)
+
+    imageio.mimsave("results/minigrid_gif/MiniGrid.gif", images, fps=1)
 
     env.close()
+
 
 if __name__ == "__main__":
     main()

@@ -2,9 +2,13 @@ from gym import spaces
 import torch
 import numpy as np
 
-class Buffer():
-    """The buffer stores and prepares the training data. It supports recurrent policies. """
-    def __init__(self, config:dict, observation_space:spaces.Box, device:torch.device) -> None:
+
+class Buffer:
+    """The buffer stores and prepares the training data. It supports recurrent policies."""
+
+    def __init__(
+        self, config: dict, observation_space: spaces.Box, device: torch.device
+    ) -> None:
         """
         Args:
             config {dict} -- Configuration and hyperparameters of the environment, trainer and model.
@@ -25,9 +29,13 @@ class Buffer():
 
         # Initialize the buffer's data storage
         self.rewards = np.zeros((self.n_workers, self.worker_steps), dtype=np.float32)
-        self.actions = torch.zeros((self.n_workers, self.worker_steps), dtype=torch.long)
+        self.actions = torch.zeros(
+            (self.n_workers, self.worker_steps), dtype=torch.long
+        )
         self.dones = np.zeros((self.n_workers, self.worker_steps), dtype=np.bool)
-        self.obs = torch.zeros((self.n_workers, self.worker_steps) + observation_space.shape)
+        self.obs = torch.zeros(
+            (self.n_workers, self.worker_steps) + observation_space.shape
+        )
         self.hxs = torch.zeros((self.n_workers, self.worker_steps, hidden_state_size))
         self.cxs = torch.zeros((self.n_workers, self.worker_steps, hidden_state_size))
         self.log_probs = torch.zeros((self.n_workers, self.worker_steps))
@@ -47,11 +55,13 @@ class Buffer():
             "obs": self.obs,
             # The loss mask is used for masking the padding while computing the loss function.
             # This is only of significance while using recurrence.
-            "loss_mask": torch.ones((self.n_workers, self.worker_steps), dtype=torch.float32)
+            "loss_mask": torch.ones(
+                (self.n_workers, self.worker_steps), dtype=torch.float32
+            ),
         }
-        
+
         # Add collected recurrent cell states to the dictionary
-        samples["hxs"] =  self.hxs
+        samples["hxs"] = self.hxs
         if self.layer_type == "lstm":
             samples["cxs"] = self.cxs
 
@@ -61,9 +71,12 @@ class Buffer():
         for w in range(self.n_workers):
             episode_done_indices.append(list(self.dones[w].nonzero()[0]))
             # Append the index of the last element of a trajectory as well, as it "artifically" marks the end of an episode
-            if len(episode_done_indices[w]) == 0 or episode_done_indices[w][-1] != self.worker_steps - 1:
+            if (
+                len(episode_done_indices[w]) == 0
+                or episode_done_indices[w][-1] != self.worker_steps - 1
+            ):
                 episode_done_indices[w].append(self.worker_steps - 1)
-        
+
         # Split obs, values, advantages, recurrent cell states, actions and log_probs into episodes and then into sequences
         max_sequence_length = 1
         for key, value in samples.items():
@@ -72,7 +85,7 @@ class Buffer():
                 start_index = 0
                 for done_index in episode_done_indices[w]:
                     # Split trajectory into episodes
-                    episode = value[w, start_index:done_index + 1]
+                    episode = value[w, start_index : done_index + 1]
                     start_index = done_index + 1
                     # Split episodes into sequences
                     if self.sequence_length > 0:
@@ -83,8 +96,12 @@ class Buffer():
                     else:
                         # If the sequence length is not set to a proper value, sequences will be based on whole episodes
                         sequences.append(episode)
-                        max_sequence_length = len(episode) if len(episode) > max_sequence_length else max_sequence_length
-            
+                        max_sequence_length = (
+                            len(episode)
+                            if len(episode) > max_sequence_length
+                            else max_sequence_length
+                        )
+
             # Apply zero-padding to ensure that each sequence has the same length
             # Therfore we can train batches of sequences in parallel instead of one sequence at a time
             for i, sequence in enumerate(sequences):
@@ -93,14 +110,14 @@ class Buffer():
             # Stack sequences (target shape: (Sequence, Step, Data ...) and apply data to the samples dictionary
             samples[key] = torch.stack(sequences, axis=0)
 
-            if (key == "hxs" or key == "cxs"):
+            if key == "hxs" or key == "cxs":
                 # Select only the very first recurrent cell state of a sequence and add it to the samples.
                 samples[key] = samples[key][:, 0]
 
         # If the sequence length is based on entire episodes, it will be as long as the longest episode.
         # Hence, this information has to be stored for the mini batch generation.
         self.true_sequence_length = max_sequence_length
-        
+
         # Flatten all samples and convert them to a tensor
         self.samples_flat = {}
         for key, value in samples.items():
@@ -108,7 +125,7 @@ class Buffer():
                 value = value.reshape(value.shape[0] * value.shape[1], *value.shape[2:])
             self.samples_flat[key] = value
 
-    def pad_sequence(self, sequence:np.ndarray, target_length:int) -> np.ndarray:
+    def pad_sequence(self, sequence: np.ndarray, target_length: int) -> np.ndarray:
         """Pads a sequence to the target length using zeros.
 
         Args:
@@ -126,7 +143,9 @@ class Buffer():
         # Construct array of zeros
         if len(sequence.shape) > 1:
             # Case: pad multi-dimensional array (e.g. visual observation)
-            padding = torch.zeros(((delta_length,) + sequence.shape[1:]), dtype=sequence.dtype)
+            padding = torch.zeros(
+                ((delta_length,) + sequence.shape[1:]), dtype=sequence.dtype
+            )
         else:
             padding = torch.zeros(delta_length, dtype=sequence.dtype)
         # Concatenate the zeros to the sequence
@@ -149,7 +168,9 @@ class Buffer():
             # Add the remainder if the sequence count and the number of mini batches do not share a common divider
             num_sequences_per_batch[i] += 1
         # Prepare indices, but only shuffle the sequence indices and not the entire batch.
-        indices = torch.arange(0, num_sequences * self.true_sequence_length).reshape(num_sequences, self.true_sequence_length)
+        indices = torch.arange(0, num_sequences * self.true_sequence_length).reshape(
+            num_sequences, self.true_sequence_length
+        )
         sequence_indices = torch.randperm(num_sequences)
         # At this point it is assumed that all of the available training data (values, observations, actions, ...) is padded.
 
@@ -168,7 +189,9 @@ class Buffer():
             start = end
             yield mini_batch
 
-    def calc_advantages(self, last_value:torch.tensor, gamma:float, lamda:float) -> None:
+    def calc_advantages(
+        self, last_value: torch.tensor, gamma: float, lamda: float
+    ) -> None:
         """Generalized advantage estimation (GAE)
 
         Arguments:
@@ -178,7 +201,9 @@ class Buffer():
         """
         with torch.no_grad():
             last_advantage = 0
-            mask = torch.tensor(self.dones).logical_not() # mask values on terminal states
+            mask = torch.tensor(
+                self.dones
+            ).logical_not()  # mask values on terminal states
             rewards = torch.tensor(self.rewards)
             for t in reversed(range(self.worker_steps)):
                 last_value = last_value * mask[:, t]

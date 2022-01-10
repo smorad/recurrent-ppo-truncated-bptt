@@ -5,7 +5,8 @@ import time
 import os
 from reprint import output
 
-class PocMemoryEnv():
+
+class PocMemoryEnv:
     """
     Proof of Concept Memory Environment
 
@@ -18,7 +19,10 @@ class PocMemoryEnv():
     Optionally and to increase the difficulty of the task, the agent's position can be frozen until the goal information is hidden.
     To further challenge the agent, the step_size can be decreased.
     """
-    def __init__(self, step_size:float=0.2, glob:bool=False, freeze:bool=False):
+
+    def __init__(
+        self, step_size: float = 0.2, glob: bool = False, freeze: bool = False
+    ):
         """
         Args:
             step_size {float} -- Step size of the agent. Defaults to 0.2.
@@ -28,22 +32,39 @@ class PocMemoryEnv():
         self.freeze = freeze
         self._step_size = step_size
         self._min_steps = int(1.0 / self._step_size) + 1
-        self._time_penalty = 0.1    
-        self._num_show_steps = 2    # this should determine for how many steps the goal is visible
-        
+        self._time_penalty = 0.1
+        self._num_show_steps = (
+            2  # this should determine for how many steps the goal is visible
+        )
+
         # Create an array with possible positions
         # Valid local positions are one tick away from 0.0 or between -0.4 and 0.4
         # Valid global positions are between -1 + step_size and 1 - step_size
         # Clipping has to be applied because step_size is a variable now
-        num_steps = int( 0.4 / self._step_size)
-        lower = min(- 2.0 * self._step_size, -num_steps * self._step_size) if not glob else -1  + self._step_size
-        upper = max( 3.0 * self._step_size, self._step_size, (num_steps + 1) * self._step_size) if not glob else 1
+        num_steps = int(0.4 / self._step_size)
+        lower = (
+            min(-2.0 * self._step_size, -num_steps * self._step_size)
+            if not glob
+            else -1 + self._step_size
+        )
+        upper = (
+            max(
+                3.0 * self._step_size,
+                self._step_size,
+                (num_steps + 1) * self._step_size,
+            )
+            if not glob
+            else 1
+        )
 
-        self.possible_positions = np.arange(lower, upper, self._step_size).clip(-1 + self._step_size, 1 - self._step_size)
-        self.possible_positions = list(map(lambda x: round(x, 2), self.possible_positions)) # fix floating point errors
+        self.possible_positions = np.arange(lower, upper, self._step_size).clip(
+            -1 + self._step_size, 1 - self._step_size
+        )
+        self.possible_positions = list(
+            map(lambda x: round(x, 2), self.possible_positions)
+        )  # fix floating point errors
 
         self.op = None
-
 
     def reset(self, **kwargs):
         """Resets the agent to a random start position and spawns the two possible goals randomly."""
@@ -63,7 +84,7 @@ class PocMemoryEnv():
         Returns:
             {spaces.Box}: The agent observes its current position and the goal locations, which are masked eventually.
         """
-        return spaces.Box(low = 0, high = 1.0, shape = (3,), dtype = np.float32)
+        return spaces.Box(low=0, high=1.0, shape=(3,), dtype=np.float32)
 
     @property
     def action_space(self):
@@ -93,12 +114,16 @@ class PocMemoryEnv():
 
         if self._num_show_steps > self._step_count:
             # Execute the agent action if agent is allowed to move
-            self._position += self._step_size * (1 - self.freeze) if action == 1 else -self._step_size * (1 - self.freeze)
+            self._position += (
+                self._step_size * (1 - self.freeze)
+                if action == 1
+                else -self._step_size * (1 - self.freeze)
+            )
             self._position = np.round(self._position, 2)
 
             obs = np.asarray([self._goals[0], self._position, self._goals[1]])
 
-            if self.freeze: # Check if agent is allowed to move
+            if self.freeze:  # Check if agent is allowed to move
                 self._step_count += 1
                 self._rewards.append(reward)
                 return obs, reward, done, info
@@ -106,7 +131,7 @@ class PocMemoryEnv():
         else:
             self._position += self._step_size if action == 1 else -self._step_size
             self._position = np.round(self._position, 2)
-            obs = np.asarray([0.0, self._position, 0.0]) # mask out goal information
+            obs = np.asarray([0.0, self._position, 0.0])  # mask out goal information
 
         # Determine the reward function and episode termination
         if self._position == -1.0:
@@ -129,9 +154,11 @@ class PocMemoryEnv():
 
         # Wrap up episode information
         if done:
-            info = {"success": success,
-                    "reward": sum(self._rewards),
-                    "length": len(self._rewards)}
+            info = {
+                "success": success,
+                "reward": sum(self._rewards),
+                "length": len(self._rewards),
+            }
         else:
             info = None
 
@@ -148,31 +175,35 @@ class PocMemoryEnv():
             self.init_render = False
             self.op = output()
             self.op = self.op.warped_obj
-            os.system('cls||clear')
+            os.system("cls||clear")
 
             for _ in range(6):
                 self.op.append("#")
 
-
         num_grids = 2 * int(1 / self._step_size) + 1
         agent_grid = int(num_grids / 2 + self._position / self._step_size) + 1
 
-        self.op[1] = ('######' * num_grids +  "#")
-        self.op[2] = ('#     ' * num_grids + "#")
-        field = [*('#     ' * agent_grid)[:-3], *"a  ", *('#     ' * (num_grids - agent_grid)), "#"]
+        self.op[1] = "######" * num_grids + "#"
+        self.op[2] = "#     " * num_grids + "#"
+        field = [
+            *("#     " * agent_grid)[:-3],
+            *"a  ",
+            *("#     " * (num_grids - agent_grid)),
+            "#",
+        ]
 
         if field[3] != "a":
             field[3] = "+" if self._goals[0] > 0 else "-"
         if field[-4] != "a":
             field[-4] = "+" if self._goals[1] > 0 else "-"
 
-        self.op[3] = ("".join(field))
-        self.op[4] = ('#     ' * num_grids + "#")
-        self.op[5] = ('######' * num_grids + "#")
-        
-        self.op[6] = ("Goals are shown: " + str(self._num_show_steps > self._step_count))
+        self.op[3] = "".join(field)
+        self.op[4] = "#     " * num_grids + "#"
+        self.op[5] = "######" * num_grids + "#"
 
-        time.sleep(1.0) 
+        self.op[6] = "Goals are shown: " + str(self._num_show_steps > self._step_count)
+
+        time.sleep(1.0)
 
     def close(self):
         """

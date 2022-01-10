@@ -5,6 +5,7 @@ import time
 from gym import spaces
 from gym_minigrid.wrappers import ViewSizeWrapper
 
+
 class Minigrid:
     def __init__(self):
         self._env = gym.make("MiniGrid-MemoryS9-v0")
@@ -12,10 +13,8 @@ class Minigrid:
         # On MiniGrid-Memory-S7-v0, the default view size is too large to actually demand a recurrent policy.
         self._env = ViewSizeWrapper(self._env, 3)
         self._observation_space = spaces.Box(
-                low = 0,
-                high = 1.0,
-                shape = (3, 84, 84),
-                dtype = np.float32)
+            low=0, high=1.0, shape=(3, 84, 84), dtype=np.float32
+        )
 
     @property
     def observation_space(self):
@@ -31,7 +30,10 @@ class Minigrid:
         self._env.seed(np.random.randint(0, 99))
         self._rewards = []
         obs = self._env.reset()
-        obs = self._env.get_obs_render(obs["image"], tile_size=28).astype(np.float32) / 255.
+        obs = (
+            self._env.get_obs_render(obs["image"], tile_size=28).astype(np.float32)
+            / 255.0
+        )
         # To conform PyTorch requirements, the channel dimension has to be first.
         obs = np.swapaxes(obs, 0, 2)
         obs = np.swapaxes(obs, 2, 1)
@@ -40,10 +42,12 @@ class Minigrid:
     def step(self, action):
         obs, reward, done, info = self._env.step(action)
         self._rewards.append(reward)
-        obs = self._env.get_obs_render(obs["image"], tile_size=28).astype(np.float32) / 255.
+        obs = (
+            self._env.get_obs_render(obs["image"], tile_size=28).astype(np.float32)
+            / 255.0
+        )
         if done:
-            info = {"reward": sum(self._rewards),
-                    "length": len(self._rewards)}
+            info = {"reward": sum(self._rewards), "length": len(self._rewards)}
         else:
             info = None
         # To conform PyTorch requirements, the channel dimension has to be first.
@@ -52,7 +56,7 @@ class Minigrid:
         return obs, reward, done, info
 
     def render(self):
-        img = self._env.render(tile_size = 96)
+        img = self._env.render(tile_size=96)
         time.sleep(0.5)
         return img
 

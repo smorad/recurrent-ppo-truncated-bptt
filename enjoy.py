@@ -5,6 +5,7 @@ from docopt import docopt
 from model import ActorCriticModel
 from utils import create_env
 
+
 def main():
     # Command line arguments via docopt
     _USAGE = """
@@ -33,7 +34,7 @@ def main():
     model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
-    
+
     # Run and render episode
     done = False
     episode_rewards = []
@@ -50,13 +51,15 @@ def main():
         # Render environment
         env.render()
         # Forward model
-        policy, value, recurrent_cell = model(torch.tensor(np.expand_dims(obs, 0)), recurrent_cell, device, 1)
+        policy, value, recurrent_cell = model(
+            torch.tensor(np.expand_dims(obs, 0)), recurrent_cell, device, 1
+        )
         # Sample action
         action = policy.sample().cpu().numpy()
         # Step environemnt
         obs, reward, done, info = env.step(int(action))
         episode_rewards.append(reward)
-    
+
     # after done, render last state
     env.render()
 
@@ -64,6 +67,7 @@ def main():
     print("Episode reward: " + str(info["reward"]))
 
     env.close()
+
 
 if __name__ == "__main__":
     main()

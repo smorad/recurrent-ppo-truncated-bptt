@@ -2,9 +2,12 @@ import multiprocessing
 import multiprocessing.connection
 from utils import create_env
 
-def worker_process(remote: multiprocessing.connection.Connection, env_name:str) -> None:
+
+def worker_process(
+    remote: multiprocessing.connection.Connection, env_name: str
+) -> None:
     """Executes the threaded interface to the environment.
-    
+
     Args:
         remote {multiprocessing.connection.Connection} -- Parent thread
         env_name {str} -- Name of the to be instantiated environment
@@ -32,16 +35,20 @@ def worker_process(remote: multiprocessing.connection.Connection, env_name:str) 
         except:
             break
 
+
 class Worker:
     """A worker that runs one environment on one thread."""
+
     child: multiprocessing.connection.Connection
     process: multiprocessing.Process
-    
-    def __init__(self, env_name:str):
+
+    def __init__(self, env_name: str):
         """
         Args:
             env_name (str) -- Name of the to be instantiated environment
         """
         self.child, parent = multiprocessing.Pipe()
-        self.process = multiprocessing.Process(target=worker_process, args=(parent, env_name))
+        self.process = multiprocessing.Process(
+            target=worker_process, args=(parent, env_name)
+        )
         self.process.start()

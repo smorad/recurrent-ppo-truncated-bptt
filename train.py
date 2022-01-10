@@ -3,6 +3,7 @@ from configs import cartpole_masked_config, minigrid_config, poc_memory_env_conf
 from docopt import docopt
 from trainer import PPOTrainer
 
+
 def main():
     # Command line arguments via docopt
     _USAGE = """
@@ -30,6 +31,7 @@ def main():
     trainer = PPOTrainer(cartpole_masked_config(), run_id=run_id, device=device)
     trainer.run_training()
     trainer.close()
+
 
 if __name__ == "__main__":
     main()
