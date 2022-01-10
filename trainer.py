@@ -23,13 +23,13 @@ class PPOTrainer:
         """Initializes all needed training components.
 
         Args:
-            config {dict} -- Configuration and hyperparameters of the environment, 
+            config {dict} -- Configuration and hyperparameters of the environment,
             trainer and model.
 
-            run_id {str, optional} -- A tag used to save Tensorboard Summaries and 
+            run_id {str, optional} -- A tag used to save Tensorboard Summaries and
             the trained model. Defaults to "run".
 
-            device {torch.device, optional} -- Determines the training device. 
+            device {torch.device, optional} -- Determines the training device.
             Defaults to cpu.
         """
         # Set variables
@@ -197,11 +197,11 @@ class PPOTrainer:
                 self.buffer.obs[:, t] = torch.tensor(self.obs)
                 # Safely modify the dict we iterate over
                 for i, hs_name in enumerate(list(self.buffer.hidden_states.keys())):
-                    self.buffer.hidden_states[hs_name][:, t] = (
-                        self.recurrent_cell[i].squeeze(0)
-                    )
+                    self.buffer.hidden_states[hs_name][:, t] = self.recurrent_cell[
+                        i
+                    ].squeeze(0)
 
-                # Forward the model to retrieve the policy, the states' value 
+                # Forward the model to retrieve the policy, the states' value
                 # and the recurrent cell states
                 policy, value, self.recurrent_cell = self.model(
                     torch.tensor(self.obs), self.recurrent_cell, self.device
@@ -235,12 +235,12 @@ class PPOTrainer:
                     obs = worker.child.recv()
                     # Reset recurrent cell states
                     if self.recurrence["reset_hidden_state"]:
-                        hxs, cxs = self.model.init_recurrent_cell_states(1, self.device)
-                        if self.recurrence["layer_type"] == "gru":
-                            self.recurrent_cell[:, w] = hxs
-                        elif self.recurrence["layer_type"] == "lstm":
-                            self.recurrent_cell[0][:, w] = hxs
-                            self.recurrent_cell[1][:, w] = cxs
+                        hidden_states = self.model.init_recurrent_cell_states(
+                            1, self.device
+                        )
+                        for i in range(len(hidden_states)):
+                            self.recurrent_cell[i][:, w] = hidden_states[i]
+
                 # Store latest observations
                 self.obs[w] = obs
 
@@ -257,7 +257,7 @@ class PPOTrainer:
     def _train_epochs(
         self, learning_rate: float, clip_range: float, beta: float
     ) -> list:
-        """Trains several PPO epochs over one batch of data while 
+        """Trains several PPO epochs over one batch of data while
         dividing the batch into mini batches.
 
         Args:
@@ -390,7 +390,7 @@ class PPOTrainer:
 
         Args:
             tensor {Tensor} -- The to be masked tensor
-            mask {Tensor} -- The mask that is used to mask out 
+            mask {Tensor} -- The mask that is used to mask out
             padded values of a loss function
 
         Returns:
