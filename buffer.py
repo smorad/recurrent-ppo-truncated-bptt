@@ -36,8 +36,14 @@ class Buffer:
         self.obs = torch.zeros(
             (self.n_workers, self.worker_steps) + observation_space.shape
         )
-        self.hxs = torch.zeros((self.n_workers, self.worker_steps, hidden_state_size))
-        self.cxs = torch.zeros((self.n_workers, self.worker_steps, hidden_state_size))
+        if self.layer_type == "gru":
+            self.hidden_state_names = ["hxs"]
+        elif self.layer_type == "lstm":
+            self.hidden_state_names = ["hxs", "cxs"]
+
+        self.hidden_states = {k: torch.zeros(
+            (self.n_workers, self.worker_steps, hidden_state_size)
+        ) for k in self.hidden_state_names}
         self.log_probs = torch.zeros((self.n_workers, self.worker_steps))
         self.values = torch.zeros((self.n_workers, self.worker_steps))
         self.advantages = torch.zeros((self.n_workers, self.worker_steps))
@@ -61,10 +67,8 @@ class Buffer:
         }
 
         # Add collected recurrent cell states to the dictionary
-        samples["hxs"] = self.hxs
-        if self.layer_type == "lstm":
-            samples["cxs"] = self.cxs
-
+        samples = {**samples, **self.hidden_states}
+        
         # Split data into sequences and apply zero-padding
         # Retrieve the indices of dones as these are the last step of a whole episode
         episode_done_indices = []
@@ -110,7 +114,7 @@ class Buffer:
             # Stack sequences (target shape: (Sequence, Step, Data ...) and apply data to the samples dictionary
             samples[key] = torch.stack(sequences, axis=0)
 
-            if key == "hxs" or key == "cxs":
+            if key in self.hidden_states: 
                 # Select only the very first recurrent cell state of a sequence and add it to the samples.
                 samples[key] = samples[key][:, 0]
 
@@ -121,7 +125,7 @@ class Buffer:
         # Flatten all samples and convert them to a tensor
         self.samples_flat = {}
         for key, value in samples.items():
-            if not key == "hxs" and not key == "cxs":
+            if key not in self.hidden_states: 
                 value = value.reshape(value.shape[0] * value.shape[1], *value.shape[2:])
             self.samples_flat[key] = value
 
@@ -181,7 +185,7 @@ class Buffer:
             mini_batch_indices = indices[sequence_indices[start:end]].reshape(-1)
             mini_batch = {}
             for key, value in self.samples_flat.items():
-                if key != "hxs" and key != "cxs":
+                if key not in self.hidden_states: 
                     mini_batch[key] = value[mini_batch_indices].to(self.device)
                 else:
                     # Collect only the recurrent cell states that are at the beginning of a sequence

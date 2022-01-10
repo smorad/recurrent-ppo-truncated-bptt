@@ -23,9 +23,14 @@ class PPOTrainer:
         """Initializes all needed training components.
 
         Args:
-            config {dict} -- Configuration and hyperparameters of the environment, trainer and model.
-            run_id {str, optional} -- A tag used to save Tensorboard Summaries and the trained model. Defaults to "run".
-            device {torch.device, optional} -- Determines the training device. Defaults to cpu.
+            config {dict} -- Configuration and hyperparameters of the environment, 
+            trainer and model.
+
+            run_id {str, optional} -- A tag used to save Tensorboard Summaries and 
+            the trained model. Defaults to "run".
+
+            device {torch.device, optional} -- Determines the training device. 
+            Defaults to cpu.
         """
         # Set variables
         self.config = config
@@ -75,13 +80,9 @@ class PPOTrainer:
         )
 
         # Setup initial recurrent cell states (LSTM: tuple(tensor, tensor) or GRU: tensor)
-        hxs, cxs = self.model.init_recurrent_cell_states(
+        self.recurrent_cell = self.model.init_recurrent_cell_states(
             self.config["n_workers"], self.device
         )
-        if self.recurrence["layer_type"] == "gru":
-            self.recurrent_cell = hxs
-        elif self.recurrence["layer_type"] == "lstm":
-            self.recurrent_cell = (hxs, cxs)
 
         # Reset workers (i.e. environments)
         print("Step 5: Reset workers")
@@ -137,33 +138,41 @@ class PPOTrainer:
 
             # Print training statistics
             if "success_percent" in episode_result:
-                result = "{:4} reward={:.2f} std={:.2f} length={:.1f} std={:.2f} success = {:.2f} pi_loss={:3f} v_loss={:3f} entropy={:.3f} loss={:3f} value={:.3f} advantage={:.3f}".format(
-                    update,
-                    episode_result["reward_mean"],
-                    episode_result["reward_std"],
-                    episode_result["length_mean"],
-                    episode_result["length_std"],
-                    episode_result["success_percent"],
-                    training_stats[0],
-                    training_stats[1],
-                    training_stats[3],
-                    training_stats[2],
-                    torch.mean(self.buffer.values),
-                    torch.mean(self.buffer.advantages),
+                result = (
+                    "{:4} reward={:.2f} std={:.2f} length={:.1f} std={:.2f} success ="
+                    " {:.2f} pi_loss={:3f} v_loss={:3f} entropy={:.3f} loss={:3f}"
+                    " value={:.3f} advantage={:.3f}".format(
+                        update,
+                        episode_result["reward_mean"],
+                        episode_result["reward_std"],
+                        episode_result["length_mean"],
+                        episode_result["length_std"],
+                        episode_result["success_percent"],
+                        training_stats[0],
+                        training_stats[1],
+                        training_stats[3],
+                        training_stats[2],
+                        torch.mean(self.buffer.values),
+                        torch.mean(self.buffer.advantages),
+                    )
                 )
             else:
-                result = "{:4} reward={:.2f} std={:.2f} length={:.1f} std={:.2f} pi_loss={:3f} v_loss={:3f} entropy={:.3f} loss={:3f} value={:.3f} advantage={:.3f}".format(
-                    update,
-                    episode_result["reward_mean"],
-                    episode_result["reward_std"],
-                    episode_result["length_mean"],
-                    episode_result["length_std"],
-                    training_stats[0],
-                    training_stats[1],
-                    training_stats[3],
-                    training_stats[2],
-                    torch.mean(self.buffer.values),
-                    torch.mean(self.buffer.advantages),
+                result = (
+                    "{:4} reward={:.2f} std={:.2f} length={:.1f} std={:.2f}"
+                    " pi_loss={:3f} v_loss={:3f} entropy={:.3f} loss={:3f} value={:.3f}"
+                    " advantage={:.3f}".format(
+                        update,
+                        episode_result["reward_mean"],
+                        episode_result["reward_std"],
+                        episode_result["length_mean"],
+                        episode_result["length_std"],
+                        training_stats[0],
+                        training_stats[1],
+                        training_stats[3],
+                        training_stats[2],
+                        torch.mean(self.buffer.values),
+                        torch.mean(self.buffer.advantages),
+                    )
                 )
             print(result)
 
@@ -186,13 +195,14 @@ class PPOTrainer:
             with torch.no_grad():
                 # Save the initial observations and recurrentl cell states
                 self.buffer.obs[:, t] = torch.tensor(self.obs)
-                if self.recurrence["layer_type"] == "gru":
-                    self.buffer.hxs[:, t] = self.recurrent_cell.squeeze(0)
-                elif self.recurrence["layer_type"] == "lstm":
-                    self.buffer.hxs[:, t] = self.recurrent_cell[0].squeeze(0)
-                    self.buffer.cxs[:, t] = self.recurrent_cell[1].squeeze(0)
+                # Safely modify the dict we iterate over
+                for i, hs_name in enumerate(list(self.buffer.hidden_states.keys())):
+                    self.buffer.hidden_states[hs_name][:, t] = (
+                        self.recurrent_cell[i].squeeze(0)
+                    )
 
-                # Forward the model to retrieve the policy, the states' value and the recurrent cell states
+                # Forward the model to retrieve the policy, the states' value 
+                # and the recurrent cell states
                 policy, value, self.recurrent_cell = self.model(
                     torch.tensor(self.obs), self.recurrent_cell, self.device
                 )
@@ -247,7 +257,8 @@ class PPOTrainer:
     def _train_epochs(
         self, learning_rate: float, clip_range: float, beta: float
     ) -> list:
-        """Trains several PPO epochs over one batch of data while dividing the batch into mini batches.
+        """Trains several PPO epochs over one batch of data while 
+        dividing the batch into mini batches.
 
         Args:
             learning_rate {float} -- The current learning rate
@@ -379,7 +390,8 @@ class PPOTrainer:
 
         Args:
             tensor {Tensor} -- The to be masked tensor
-            mask {Tensor} -- The mask that is used to mask out padded values of a loss function
+            mask {Tensor} -- The mask that is used to mask out 
+            padded values of a loss function
 
         Returns:
             {Tensor} -- Returns the mean of the masked tensor.
