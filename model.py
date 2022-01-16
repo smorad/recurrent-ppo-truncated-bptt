@@ -4,6 +4,28 @@ from torch import nn
 from torch.distributions import Categorical
 from torch.nn import functional as F
 
+from memory_model import MaskedLSTM
+
+
+class PhiNet(nn.Module):
+    def __init__(self, in_features_next_layer, hidden_state_size):
+        super().__init__()
+        self.phi = torch.nn.Sequential(
+            torch.nn.Linear(in_features_next_layer, hidden_state_size // 2),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_state_size // 2, hidden_state_size // 2),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_state_size // 2, 1),
+        )
+        for name, param in self.phi.named_parameters():
+            if "bias" in name:
+                nn.init.constant_(param, 0)
+            elif "weight" in name:
+                nn.init.orthogonal_(param, np.sqrt(2))
+
+    def forward(self, x):
+        return self.phi(x)
+
 
 class Encoder(nn.Module):
     def __init__(self, obs_space):
@@ -53,9 +75,7 @@ class Policy(nn.Module):
         # Hidden layer
         self.hidden_state_size = hidden_state_size
         self.hidden_size = hidden_size
-        self.lin_hidden = nn.Linear(
-            self.hidden_state_size, self.hidden_size
-        )
+        self.lin_hidden = nn.Linear(self.hidden_state_size, self.hidden_size)
         nn.init.orthogonal_(self.lin_hidden.weight, np.sqrt(2))
 
         # Decouple policy from value
@@ -92,6 +112,7 @@ class Policy(nn.Module):
 
         return pi, value
 
+
 class ActorCriticModel(nn.Module):
     def __init__(self, config, observation_space, action_space_shape):
         """Model setup
@@ -106,7 +127,7 @@ class ActorCriticModel(nn.Module):
         self.recurrence = config["recurrence"]
         self.observation_space_shape = observation_space.shape
 
-        self.encoder = Encoder(observation_space) 
+        self.encoder = Encoder(observation_space)
         # Observation encoder
         if len(self.observation_space_shape) > 1:
             # Case: visual observation is available
@@ -117,6 +138,8 @@ class ActorCriticModel(nn.Module):
             # Case: vector observation is available
             in_features_next_layer = observation_space.shape[0]
 
+        self.in_features_next_layer = in_features_next_layer
+
         # Recurrent layer (GRU or LSTM)
         if self.recurrence["layer_type"] == "gru":
             self.recurrent_layer = nn.GRU(
@@ -125,11 +148,17 @@ class ActorCriticModel(nn.Module):
                 batch_first=True,
             )
         elif self.recurrence["layer_type"] == "lstm":
+            self.recurrent_layer = MaskedLSTM(
+                in_features_next_layer,
+                self.recurrence["hidden_state_size"],
+            )
+            """
             self.recurrent_layer = nn.LSTM(
                 in_features_next_layer,
                 self.recurrence["hidden_state_size"],
                 batch_first=True,
             )
+            """
         # Init recurrent layer
         for name, param in self.recurrent_layer.named_parameters():
             if "bias" in name:
@@ -137,31 +166,10 @@ class ActorCriticModel(nn.Module):
             elif "weight" in name:
                 nn.init.orthogonal_(param, np.sqrt(2))
 
-        self.phi = torch.nn.Sequential(
-            torch.nn.Linear(
-                in_features_next_layer,
-                self.recurrence["hidden_state_size"] // 2
-            ),
-            torch.nn.ReLU(),
-            torch.nn.Linear(
-                self.recurrence["hidden_state_size"] // 2,
-                self.recurrence["hidden_state_size"] // 2
-            ),
-            torch.nn.ReLU(),
-            torch.nn.Linear(
-                self.recurrence["hidden_state_size"] // 2,
-                1
-            ),
-        )
-        for name, param in self.phi.named_parameters():
-            if "bias" in name:
-                nn.init.constant_(param, 0)
-            elif "weight" in name:
-                nn.init.orthogonal_(param, np.sqrt(2))
-
-            
         self.policy = Policy(
-            self.recurrence["hidden_state_size"], self.hidden_size, action_space_shape[0]
+            self.recurrence["hidden_state_size"],
+            self.hidden_size,
+            action_space_shape[0],
         )
 
     def forward(
