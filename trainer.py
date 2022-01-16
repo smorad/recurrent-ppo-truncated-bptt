@@ -5,7 +5,7 @@ import torch
 import time
 from torch import optim
 from buffer import Buffer
-from model import ActorCriticModel
+from model import ActorCriticModel, PhiNet
 from worker import Worker
 from utils import create_env
 from utils import polynomial_decay
@@ -63,10 +63,15 @@ class PPOTrainer:
         self.model = ActorCriticModel(
             self.config, observation_space, action_space_shape
         ).to(self.device)
+        self.phi = PhiNet(
+            self.model.in_features_next_layer, self.recurrence["hidden_state_size"]
+        )
         self.model.train()
+        self.phi.train()
         self.optimizer = optim.AdamW(
             self.model.parameters(), lr=self.lr_schedule["initial"]
         )
+        self.phi_optimizer = optim.AdamW(self.phi.parameters(), lr=0.001)
 
         # Init workers
         print("Step 4: Init environment workers")
@@ -210,6 +215,7 @@ class PPOTrainer:
                 policy, value, self.recurrent_cell = self.model(
                     torch.tensor(self.obs), self.recurrent_cell, self.device
                 )
+
                 self.buffer.values[:, t] = value
 
                 # Sample actions
@@ -281,6 +287,140 @@ class PPOTrainer:
                 )
         return train_info
 
+    def _compute_phi_loss(self, samples, num_dropouts=4):
+        ####
+        # Overview:
+        #
+        # 1. Select a dropout idx i for each time sequence, where
+        # 0 <= i_sequence <= seq_lens[sequence]
+        #
+        # 2. Run obs through encoder and LSTM to compute
+        # LSTM hidden state at time i-1
+        #
+        # 3. Compute values for i..n with hidden state i-1
+        # and values for i..n with hidden state i. We call these
+        # the "divergent" values, because the value functions diverge
+        # at i
+        #
+        # 4. Compute loss between divergent and normal values
+        ####
+        inputs = []
+        targets = []
+
+        ## Part 1.
+        #
+        # Chop into sequences
+        start_shape = [
+            samples["obs"].shape[0] // self.recurrence["sequence_length"],
+            self.recurrence["sequence_length"],
+        ]
+        # Remove all sequences less than 3 timesteps long
+        # 2 timesteps needed to have a divergence
+        # at o_0 we see m=null and x=o_0
+        # at o_1 we see m=null and x=o_1 (no more o_0 visible)
+        batch_mask = samples["loss_mask"].reshape(start_shape).sum(dim=-1) > 1
+        seq_shape = [
+            samples["obs"].shape[0] // self.recurrence["sequence_length"],
+            self.recurrence["sequence_length"],
+        ]
+        # Make sure we mask out padding
+        seq_mask = samples["loss_mask"].reshape(start_shape).bool()[batch_mask]
+        # Reshape into sequences [B, T, x]
+        obs_seq = samples["obs"].reshape(start_shape + [samples["obs"].shape[-1]])[batch_mask]
+        # The non-padded length of each sequence
+        seq_lens = seq_mask.sum(dim=1).int()
+
+        for d in range(num_dropouts):
+            with torch.no_grad():
+                # Compute the index to dropout (randomly)
+                # -1 so we don't sample the final step in a segment
+                dropout_idx = torch.randint(
+                    self.recurrence["sequence_length"] - 1, seq_lens.shape
+                )
+                # Some dropout idx may refer to segments shorter than
+                # sequence_length, fix overflows using moduluo
+                # With n elems, we get n-1 from indexing and
+                # n-2 because we don't want the last step in an sequence
+                # n-3 because we don't see the effect until the step
+                # after, because o_t is seen at o_t
+                dropout_idx = dropout_idx % (seq_lens - 1)
+
+                ## Part 2
+                #
+                # z will be used to compute values later
+                z = self.model.encoder(obs_seq)
+                # batch size
+                B = z.shape[0]
+                # Compute the convergent and divergent masks
+                # Convergent is from 0 to seq_len
+                # Divergent is from 0 to seq_len, not including i
+                # Diff mask is i..seq_len
+                select_idx = torch.arange(
+                    0, self.recurrence["sequence_length"]
+                ).expand(B, self.recurrence["sequence_length"])
+                convergent_seq_lens = dropout_idx
+                convergent_mask = seq_mask
+                divergent_mask = (
+                    select_idx != dropout_idx.unsqueeze(1)
+                ) * seq_mask
+                # Full sequence is all three masks, while the dropout
+                # sequence removes the dropout mask
+                convergent_output, _ = self.model.recurrent_layer(
+                    z,
+                    state=self.model.init_recurrent_cell_states(B, z.device),
+                    mask=convergent_mask
+                )
+                divergent_output, _ = self.model.recurrent_layer(
+                    z,
+                    state=self.model.init_recurrent_cell_states(B, z.device),
+                    mask=divergent_mask
+                )
+                # Value estimates
+                _, convergent_v = self.model.policy(convergent_output)
+                _, divergent_v = self.model.policy(divergent_output)
+                # Compute error/residual
+                convergent_v = convergent_v.reshape(convergent_mask.shape)
+                divergent_v = divergent_v.reshape(convergent_mask.shape)
+                # Sanity check
+                residual = convergent_v - divergent_v
+                # Note that we do memory(m, o_t), so we
+                # need to compare starting one step in the future
+                # (when o_t is not present in memory and also not present
+                # in obs). For this reason, ignore the first masked value.
+                residual_mask = (select_idx > dropout_idx.unsqueeze(1)) * seq_mask
+                """
+                assert torch.all(
+                    convergent_v[residual_mask] 
+                    != divergent_v[residual_mask]
+                )
+                """
+                # Zero invalid (masked-out) entries
+                # as well as entries they have in common.
+                masked_residual = residual.masked_scatter(
+                    ~residual_mask, torch.zeros(residual_mask.shape)
+                )
+                # Phi should predict the absolute mean error
+                target = (
+                    masked_residual.abs().sum(dim=-1) 
+                    / masked_residual.count_nonzero(dim=-1)
+                )
+                # Now add train data (X, Y, and mask)
+                inputs.append(z[torch.arange(B), dropout_idx])
+                targets.append(target)
+
+        # Compute loss and train
+        x = torch.cat(inputs)
+        y = torch.cat(targets).unsqueeze(1)
+        y_hat = self.phi(x)
+
+        error = y - y_hat
+        loss = (error **  2).mean()
+        loss_std = error.std().detach()
+        pred_mean = y_hat.mean().detach()
+        pred_std = y_hat.std().detach()
+
+        return loss, loss_std, pred_mean, pred_std
+
     def _train_mini_batch(
         self, samples: dict, learning_rate: float, clip_range: float, beta: float
     ) -> list:
@@ -336,152 +476,17 @@ class PPOTrainer:
         # Entropy Bonus
         entropy_bonus = PPOTrainer._masked_mean(policy.entropy(), samples["loss_mask"])
 
-        ####
-        # Begin my shit
-        # Overview:
-        # 
-        # 1. Select a dropout idx i for each time sequence, where
-        # 0 <= i_sequence <= seq_lens[sequence]
-        # 
-        # 2. Run obs through encoder and LSTM to compute
-        # LSTM hidden state at time i-1
-        # 
-        # 3. Compute values for i..n with hidden state i-1
-        # and values for i..n with hidden state i. We call these
-        # the "divergent" values, because the value functions diverge
-        # at i
-        #
-        # 4. Compute loss between divergent and normal values
-        ####
-        num_dropouts = 4
-        losses = torch.zeros(num_dropouts)
-
-        for d in range(num_dropouts):
-
-            ## Part 1.
-            #
-            # Chop into sequences
-            seq_shape = [
-                samples["obs"].shape[0] // self.recurrence["sequence_length"],
-                self.recurrence["sequence_length"],
-                ]
-            # Reshape into sequences [B, T, x]
-            obs_seq = samples["obs"].reshape(
-                seq_shape + [samples["obs"].shape[-1]]
-            )
-            # Make sure we mask out padding
-            mask_seq = samples["loss_mask"].reshape(seq_shape).clone().bool()
-            # The non-padded length of each sequence
-            seq_lens = mask_seq.sum(dim=1).int()
-            # Compute the index to dropout (randomly)
-            # -1 so we don't sample the final step in a segment
-            dropout_idx = torch.randint(
-                self.recurrence["sequence_length"] - 1, seq_lens.shape
-            )
-            # Some dropout idx may refer to segments shorter than
-            # sequence_length, fix overflows using moduluo
-            # TODO: this assumes most segments will be sequence_length
-            dropout_idx = dropout_idx % seq_lens
-
-            ## Part 2
-            #
-            # z will be used to compute values later
-            z = self.model.encoder(obs_seq)
-            # Compute recurrent states for sequences
-            # at i-1
-            # Can't pack where seq_len == 0 and 
-            # where dropout_idx == 1 we just need zero init state
-            # so mask out these entries for now
-            nonzero_recurrent_mask = dropout_idx > 1
-            padded_seq = torch.nn.utils.rnn.pack_padded_sequence(
-                z[nonzero_recurrent_mask], 
-                dropout_idx[nonzero_recurrent_mask] - 1, 
-                batch_first=True, 
-                enforce_sorted=False
-            )
-            # Store recurrent states computed at i-1
-            i_prev_h = torch.zeros(
-                (nonzero_recurrent_mask.shape[0], self.recurrence["hidden_state_size"])
-            )
-            i_prev_c = torch.zeros(
-                (nonzero_recurrent_mask.shape[0], self.recurrence["hidden_state_size"])
-            )
-            # Compute recurrent states at i-1
-            _, (dropout_h, dropout_c) = self.model.recurrent_layer(padded_seq)
-            # Only set recurrent states where necessary. If i == 0
-            # then recurrent state should remain zero
-            # TODO: if i == 1, this should be non-zero but is zero here?
-            i_prev_h[nonzero_recurrent_mask] = dropout_h
-            i_prev_c[nonzero_recurrent_mask] = dropout_c
-
-            ## Part 3.
-            #
-            # Select the encodings z of the observations o_i...o_n
-            select_idx = torch.arange(
-                1, self.recurrence["sequence_length"] + 1
-            ).expand(seq_lens.numel(), self.recurrence["sequence_length"])
-            # The length of the rest of the episode after i (i.e. seq_len - i)
-            divergent_seq_lens = seq_lens - dropout_idx
-            # Choose all divergent indices and combine with the valid mask
-            divergent_mask = (select_idx >= divergent_seq_lens.unsqueeze(-1)) * mask_seq 
-            # To pack, we need all z to start at index 0
-            # so shift each row left by i (dropout_idx)
-            # TODO: vectorize this
-            divergent_shifted_z = z.clone()
-            for s in range(dropout_idx.numel()):
-                divergent_shifted_z[s, :divergent_seq_lens[s]] = z[s, dropout_idx[s]:seq_lens[s]]
-            # All valid z including and after i
-            divergent_seq = torch.nn.utils.rnn.pack_padded_sequence(
-                #z[divergent_mask],
-                divergent_shifted_z,
-                divergent_seq_lens,
-                batch_first=True,
-                enforce_sorted=False
-            )
-            # The divergent_h should diverge from the normal h
-            divergent_packed_seq, _ = self.model.recurrent_layer(divergent_seq)
-            # Unpack the torch PackedSequence
-            divergent_h, _ = torch.nn.utils.rnn.pad_packed_sequence(
-                divergent_packed_seq, batch_first=True
-            )
-            # And the following value estimates should diverge from
-            # the normal value estimates as well
-            _, divergent_v = self.model.policy(divergent_h)
-            # Original values after the divergence point
-            original_v = value.detach()
-
-            ## Part 4.
-            #
-            # Compute the loss
-
-            # Reshape so we can apply the divergent mask later
-            residual = (
-                divergent_v.reshape(divergent_mask.shape)
-                - original_v.reshape(divergent_mask.shape)
-            )
-            # Take the mean over each sequence while also not
-            # angering autograd
-            # Zero the invalid entries
-            residual[~divergent_mask] = (
-                residual[~divergent_mask] - residual[~divergent_mask]
-            )
-            # Mean over number of valid entries
-            mean_residual = residual.sum(dim=-1) / (residual.nonzero().numel() // 2)
-            # Network input
-            dropout_z = z[torch.arange(dropout_idx.shape[0]), dropout_idx]
-            # Network output
-            phi_pred = self.model.phi(dropout_z).squeeze(-1)
-            # TODO: we need to take a 3D masked mean
-            phi_loss = (mean_residual - phi_pred ** 2).mean()
-            losses[d] = phi_loss
-        phi_losses = losses.sum()
+        """
+        phi_loss, phi_loss_std, pred_mean, pred_std = self._compute_phi_loss(
+            samples
+        )
+        """
 
         # Complete loss
         loss = -(
             policy_loss
             - self.config["value_loss_coefficient"] * vf_loss
             + beta * entropy_bonus
-            + phi_losses
         )
 
         # Compute gradients
@@ -492,12 +497,22 @@ class PPOTrainer:
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
         self.optimizer.step()
 
+        """
+        self.phi_optimizer.zero_grad()
+        phi_loss.backward()
+        self.optimizer.step()
+        """
+
         return [
             policy_loss.cpu().data.numpy(),
             vf_loss.cpu().data.numpy(),
             loss.cpu().data.numpy(),
             entropy_bonus.cpu().data.numpy(),
-            phi_loss.cpu().data.numpy(),
+            0,0,0,0
+            #phi_loss.cpu().data.numpy(),
+            #phi_loss_std.cpu().data.numpy(),
+            #pred_mean.cpu().data.numpy(),
+            #pred_std.cpu().data.numpy(),
         ]
 
     def _write_training_summary(self, update, training_stats, episode_result) -> None:
@@ -519,6 +534,9 @@ class PPOTrainer:
         self.writer.add_scalar("losses/value_loss", training_stats[1], update)
         self.writer.add_scalar("losses/entropy", training_stats[3], update)
         self.writer.add_scalar("losses/phi_loss", training_stats[4], update)
+        self.writer.add_scalar("losses/phi_loss_std", training_stats[5], update)
+        self.writer.add_scalar("losses/phi_pred_mean", training_stats[6], update)
+        self.writer.add_scalar("losses/phi_pred_std", training_stats[7], update)
         self.writer.add_scalar(
             "training/sequence_length", self.buffer.true_sequence_length, update
         )
